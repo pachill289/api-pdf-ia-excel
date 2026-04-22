@@ -17,8 +17,14 @@ class InvoiceData(BaseModel):
     concepto: str = ""
 
 class ProcessResult(BaseModel):
-    status: str                     # "added" | "duplicate" | "error"
+    # Estado global (para compatibilidad con el frontend)
+    status: str                         # "added" | "duplicate" | "error"
     nro_factura: str
     message: str
     spreadsheet_url: Optional[str] = None
     invoice_data: Optional[InvoiceData] = None
+    # Estado individual por hoja
+    status_facturas:  Optional[str] = None
+    message_facturas: Optional[str] = None
+    status_pll:       Optional[str] = None
+    message_pll:      Optional[str] = None

@@ -1,24 +1,15 @@
-"""
-API unificada para procesamiento de facturas TIGO.
-Reemplaza el flujo completo de Make.com:
-  Webhook → Iterator → HTTP (extract) → HTTP (GPT) → JSON → Sheets → Router → Webhook response
-"""
-
 import os
 from dotenv import load_dotenv
 load_dotenv()
 
-# CORS
-from fastapi.middleware.cors import CORSMiddleware
-
 from fastapi import FastAPI, Request, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 
 from models import InvoiceData, ProcessResult
 from services.pdf_extractor import extract_text_from_bytes
 from services.openai_parser import parse_invoice_with_gpt
-from services.sheets_manager import check_and_save_invoice
+from services.sheets_manager import check_and_save_invoice, get_pll_next_doc_entry
 
 app = FastAPI(
     title="Invoice Processor API",
@@ -34,104 +25,97 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─────────────────────────────────────────────
-# ENDPOINT PRINCIPAL — reemplaza TODO el flujo
-# ─────────────────────────────────────────────
 
 @app.post("/process-invoices", response_model=List[ProcessResult])
 async def process_invoices(files: List[UploadFile] = File(...)):
-    """
-    Recibe uno o varios archivos PDF y por cada uno:
-    1. Extrae el texto (PyMuPDF)
-    2. Parsea los campos con GPT-3.5-turbo
-    3. Verifica/agrega en Google Sheets
-    4. Devuelve el resultado
-
-    Uso desde Make (webhook) o cualquier cliente HTTP:
-      POST /process-invoices
-      Content-Type: multipart/form-data
-      files: [archivo1.pdf, archivo2.pdf, ...]
-    """
     results: List[ProcessResult] = []
+
+    # Calcular el DocEntry base UNA sola vez para todo el lote.
+    # Si la hoja PLL está vacía → arranca en 1.
+    # Si ya tiene registros → continúa desde el máximo + 1.
+    # Cada factura nueva del lote incrementa el contador localmente.
+    try:
+        doc_entry_counter = get_pll_next_doc_entry()
+    except Exception as e:
+        # Si falla la conexión a Sheets al inicio, abortar con error claro
+        return [ProcessResult(
+            status="error",
+            nro_factura="—",
+            message=f"No se pudo conectar a Google Sheets: {str(e)}",
+        )]
 
     for upload in files:
         nro = "desconocida"
         try:
-            # ① Leer bytes del PDF
             pdf_bytes = await upload.read()
             if not pdf_bytes:
                 raise ValueError("Archivo vacío")
 
-            # ② Extraer texto
             text = extract_text_from_bytes(pdf_bytes)
             if not text:
                 raise ValueError("No se pudo extraer texto del PDF")
 
-            # ③ Parsear con GPT → InvoiceData
             invoice: InvoiceData = parse_invoice_with_gpt(text)
             nro = invoice.nro_factura or "sin_numero"
 
-            # ④ Verificar y guardar en Google Sheets
-            sheet_result = check_and_save_invoice(invoice)
+            sheet_result = check_and_save_invoice(invoice, doc_entry_counter)
+
+            # Solo incrementar el contador si realmente se insertó en PLL
+            if sheet_result["status_pll"] == "added":
+                doc_entry_counter += 1
 
             results.append(ProcessResult(
-                status=sheet_result["status"],
-                nro_factura=nro,
-                message=sheet_result["message"],
-                spreadsheet_url=sheet_result["spreadsheet_url"],
-                invoice_data=invoice,
+                status           = sheet_result["status_facturas"],
+                nro_factura      = nro,
+                message          = sheet_result["message_facturas"],
+                spreadsheet_url  = sheet_result["spreadsheet_url"],
+                invoice_data     = invoice,
+                status_facturas  = sheet_result["status_facturas"],
+                message_facturas = sheet_result["message_facturas"],
+                status_pll       = sheet_result["status_pll"],
+                message_pll      = sheet_result["message_pll"],
             ))
 
         except Exception as e:
             results.append(ProcessResult(
-                status="error",
-                nro_factura=nro,
-                message=f"Error procesando {upload.filename}: {str(e)}",
+                status      = "error",
+                nro_factura = nro,
+                message     = f"Error procesando {upload.filename}: {str(e)}",
             ))
 
     return results
 
 
-# ─────────────────────────────────────────────
-# ENDPOINT LEGADO — compatible con tu lógica actual
-# (recibe bytes crudos, igual que tu /extract-text)
-# ─────────────────────────────────────────────
-
 @app.post("/process-invoice-raw", response_model=ProcessResult)
 async def process_invoice_raw(request: Request):
-    """
-    Compatibilidad con el nodo HTTP de Make que envía datos binarios crudos.
-    Recibe los bytes del PDF directamente en el body (sin multipart).
-    """
     pdf_bytes = await request.body()
     if not pdf_bytes:
         raise HTTPException(status_code=400, detail="Body vacío")
 
     nro = "desconocida"
     try:
-        text = extract_text_from_bytes(pdf_bytes)
-        invoice: InvoiceData = parse_invoice_with_gpt(text)
-        nro = invoice.nro_factura or "sin_numero"
-        sheet_result = check_and_save_invoice(invoice)
+        text     = extract_text_from_bytes(pdf_bytes)
+        invoice  = parse_invoice_with_gpt(text)
+        nro      = invoice.nro_factura or "sin_numero"
+        entry    = get_pll_next_doc_entry()
+        result   = check_and_save_invoice(invoice, entry)
 
         return ProcessResult(
-            status=sheet_result["status"],
-            nro_factura=nro,
-            message=sheet_result["message"],
-            spreadsheet_url=sheet_result["spreadsheet_url"],
-            invoice_data=invoice,
+            status           = result["status_facturas"],
+            nro_factura      = nro,
+            message          = result["message_facturas"],
+            spreadsheet_url  = result["spreadsheet_url"],
+            invoice_data     = invoice,
+            status_facturas  = result["status_facturas"],
+            message_facturas = result["message_facturas"],
+            status_pll       = result["status_pll"],
+            message_pll      = result["message_pll"],
         )
     except Exception as e:
         return ProcessResult(
-            status="error",
-            nro_factura=nro,
-            message=str(e),
+            status="error", nro_factura=nro, message=str(e)
         )
 
-
-# ─────────────────────────────────────────────
-# HEALTH CHECK
-# ─────────────────────────────────────────────
 
 @app.get("/health")
 def health():
