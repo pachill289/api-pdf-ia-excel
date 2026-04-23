@@ -30,22 +30,19 @@ app.add_middleware(
 async def process_invoices(files: List[UploadFile] = File(...)):
     results: List[ProcessResult] = []
 
-    # Calcular el DocEntry base UNA sola vez para todo el lote.
-    # Si la hoja PLL está vacía → arranca en 1.
-    # Si ya tiene registros → continúa desde el máximo + 1.
-    # Cada factura nueva del lote incrementa el contador localmente.
     try:
         doc_entry_counter = get_pll_next_doc_entry()
     except Exception as e:
-        # Si falla la conexión a Sheets al inicio, abortar con error claro
         return [ProcessResult(
             status="error",
             nro_factura="—",
+            filename=None,
             message=f"No se pudo conectar a Google Sheets: {str(e)}",
         )]
 
     for upload in files:
-        nro = "desconocida"
+        nro      = "desconocida"
+        filename = upload.filename or "archivo_desconocido.pdf"
         try:
             pdf_bytes = await upload.read()
             if not pdf_bytes:
@@ -60,13 +57,13 @@ async def process_invoices(files: List[UploadFile] = File(...)):
 
             sheet_result = check_and_save_invoice(invoice, doc_entry_counter)
 
-            # Solo incrementar el contador si realmente se insertó en PLL
             if sheet_result["status_pll"] == "added":
                 doc_entry_counter += 1
 
             results.append(ProcessResult(
                 status           = sheet_result["status_facturas"],
                 nro_factura      = nro,
+                filename         = filename,
                 message          = sheet_result["message_facturas"],
                 spreadsheet_url  = sheet_result["spreadsheet_url"],
                 invoice_data     = invoice,
@@ -80,7 +77,8 @@ async def process_invoices(files: List[UploadFile] = File(...)):
             results.append(ProcessResult(
                 status      = "error",
                 nro_factura = nro,
-                message     = f"Error procesando {upload.filename}: {str(e)}",
+                filename    = filename,
+                message     = f"Error al procesar: {str(e)}",
             ))
 
     return results
@@ -94,15 +92,16 @@ async def process_invoice_raw(request: Request):
 
     nro = "desconocida"
     try:
-        text     = extract_text_from_bytes(pdf_bytes)
-        invoice  = parse_invoice_with_gpt(text)
-        nro      = invoice.nro_factura or "sin_numero"
-        entry    = get_pll_next_doc_entry()
-        result   = check_and_save_invoice(invoice, entry)
+        text    = extract_text_from_bytes(pdf_bytes)
+        invoice = parse_invoice_with_gpt(text)
+        nro     = invoice.nro_factura or "sin_numero"
+        entry   = get_pll_next_doc_entry()
+        result  = check_and_save_invoice(invoice, entry)
 
         return ProcessResult(
             status           = result["status_facturas"],
             nro_factura      = nro,
+            filename         = None,
             message          = result["message_facturas"],
             spreadsheet_url  = result["spreadsheet_url"],
             invoice_data     = invoice,
@@ -113,7 +112,7 @@ async def process_invoice_raw(request: Request):
         )
     except Exception as e:
         return ProcessResult(
-            status="error", nro_factura=nro, message=str(e)
+            status="error", nro_factura=nro, filename=None, message=str(e)
         )
 
 

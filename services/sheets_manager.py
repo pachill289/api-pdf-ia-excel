@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import gspread
 from google.oauth2.service_account import Credentials
 from dotenv import load_dotenv
@@ -33,59 +34,74 @@ HEADERS_FACTURAS = [
     "Tipo de Pago",        # N
 ]
 
-HEADERS_PLL = [
-    "DocNum",               # A  - vacío
-    "DocEntry",             # B  ← autoincremental
-    "ItemCode",             # C
-    "",                     # D
-    "DocDueDate",           # E
-    "CardCode",             # F
-    "NumAtCard",            # G  ← nro_factura
-    "",                     # H
-    "",                     # I
-    "",                     # J
-    "DocTotal",             # K  ← monto_total
-    "DocCurrency",          # L
-    "CostingCode",          # M
-    "",                     # N
-    "JournalMemo",          # O  ← concepto
-    "TaxDate",              # P  ← fecha_emision
-    "U_RAZSOC",             # Q  ← razon_social_cliente
-    "U_NROAUTOR",           # R  ← cod_autorizacion
-    "U_FORMA_PAGO",         # S
-    "U_NOMBRE_SOLICITANTE", # T
-    "U_ADJ_DIRECTA",        # U
-    "U_NROCONTRATOADENDA",  # V  ← contrato
-    "U_NROPAGOCONTRACTUAL", # W
-    "U_FECHAINICIO",        # X
-    "U_FECHAFIN",           # Y
-    "U_PERIODO",            # Z  ← periodo_facturacion
-    "U_NRODEFACTURA",       # AA ← nro_factura (repetido)
-    "U_INMUEBLE",           # AB
-    "U_Nro_cuenta",         # AC
-    "U_Nombre_banco",       # AD
-    "U_B_cuf",              # AE ← cod_autorizacion (repetido)
+# Fila 1: nombres técnicos (header principal)
+HEADERS_PLL_ROW1 = [
+    "DocNum","DocEntry","ItemCode","","DocDueDate","CardCode","NumAtCard",
+    "","","","DocTotal","DocCurrency","CostingCode","","JournalMemo",
+    "TaxDate","U_RAZSOC","U_NROAUTOR","U_FORMA_PAGO","U_NOMBRE_SOLICITANTE",
+    "U_ADJ_DIRECTA","U_NROCONTRATOADENDA","U_NROPAGOCONTRACTUAL",
+    "U_FECHAINICIO","U_FECHAFIN","U_PERIODO","U_NRODEFACTURA",
+    "U_INMUEBLE","U_Nro_cuenta","U_Nombre_banco","U_B_cuf",
 ]
 
-# Índices de columna (1-based) usados para búsquedas
-COL_FACTURAS_NRO = 1   # columna A: no. fact
-COL_PLL_DOCENTRY = 2   # columna B: DocEntry (autoincremental)
-COL_PLL_NRO      = 7   # columna G: NumAtCard = nro_factura
+# Fila 2: nombres legibles en rojo (segundo encabezado)
+HEADERS_PLL_ROW2 = [
+    "","N°","N° ARTÍCULO","DESCRIPCION ARTÍCULO","FECHA DE SOLICITUD",
+    "CODIGO PROVEEDOR EN SAP","N° FACTURA","SUBTOTAL","DESCUENTO","%",
+    "MONTO TOTAL DE LA FACTURA","MONEDA","CENTRO DE COSTO","IMPORTE CECO",
+    "COMENTARIO/DESCRIPCION DE PAGO DE LA FACTURA","FECHA DE FACTURA",
+    "RAZON SOCIAL","CUF/NRO AUTORIZACION","FORMA DE PAGO","NOMBRE SOLICITANTE",
+    "PAGO PROVEEDOR","CONTRATO O ADENDA (INDICAR EL VIGENTE)",
+    "N° DE PAGO QUE SE ESTA REALIZANDO DEL CTTO O ADENDA",
+    "FECHA INICIO CTTO O ADENDA","FECHA FIN CTTO O ADENDA","PERIODO DEL SERVICIO",
+    "NRO DE FACTURA","SUCURSAL","NRO CUENTA BANCARIA","NOMBRE BANCO",
+    "CUF/NRO AUTORIZACION",
+]
+
+COL_FACTURAS_NRO = 1   # col A: no. fact
+COL_PLL_DOCENTRY = 2   # col B: DocEntry
+COL_PLL_NRO      = 7   # col G: NumAtCard = nro_factura
+PLL_DATA_START   = 3   # los datos arrancan en fila 3 (filas 1 y 2 son headers)
+
+# ── Utilidades ────────────────────────────────────────────────────────────────
+
+def _col_letter(n):
+    result = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        result = chr(65 + r) + result
+    return result
+
+
+def _with_retry(fn, retries=3, delay=2):
+    """
+    Reintenta fn() hasta `retries` veces ante errores de red/timeout.
+    Resuelve los errores intermitentes en Render (plan gratuito hiberna).
+    """
+    last_err = None
+    for attempt in range(retries):
+        try:
+            return fn()
+        except Exception as e:
+            last_err = e
+            if attempt < retries - 1:
+                time.sleep(delay * (attempt + 1))  # backoff: 2s, 4s
+    raise last_err
 
 
 def _get_spreadsheet():
     creds_content = os.getenv("GOOGLE_CREDENTIALS_JSON_CONTENT")
     if creds_content:
-        info = json.loads(creds_content)
+        info  = json.loads(creds_content)
         creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     else:
-        credentials_path = os.getenv("GOOGLE_CREDENTIALS_JSON", "credentials.json")
-        if not os.path.exists(credentials_path):
+        path = os.getenv("GOOGLE_CREDENTIALS_JSON", "credentials.json")
+        if not os.path.exists(path):
             raise FileNotFoundError(
-                f"No se encontro '{credentials_path}'.\n"
+                f"No se encontro '{path}'.\n"
                 "Descarga el JSON de tu Service Account y colocalo en la raiz del proyecto."
             )
-        creds = Credentials.from_service_account_file(credentials_path, scopes=SCOPES)
+        creds = Credentials.from_service_account_file(path, scopes=SCOPES)
 
     if not SPREADSHEET_ID:
         raise ValueError("La variable SPREADSHEET_ID esta vacia. Agregala en tu .env")
@@ -94,136 +110,157 @@ def _get_spreadsheet():
     return gc.open_by_key(SPREADSHEET_ID)
 
 
-def _get_or_create_sheet(spreadsheet, name, headers):
+def _get_or_create_sheet_facturas(spreadsheet):
     try:
-        return spreadsheet.worksheet(name)
+        return spreadsheet.worksheet(SHEET_NAME)
     except gspread.WorksheetNotFound:
-        sheet = spreadsheet.add_worksheet(title=name, rows=1000, cols=len(headers))
-        sheet.update("A1", [headers])
+        sheet = spreadsheet.add_worksheet(
+            title=SHEET_NAME, rows=1000, cols=len(HEADERS_FACTURAS)
+        )
+        sheet.update("A1", [HEADERS_FACTURAS])
         return sheet
 
 
-def _col_letter(n):
-    """Convierte número de columna 1-based a letra(s) Excel."""
-    result = ""
-    while n > 0:
-        n, r = divmod(n - 1, 26)
-        result = chr(65 + r) + result
-    return result
+def _get_or_create_sheet_pll(spreadsheet):
+    """
+    Crea la hoja PLL con dos filas de encabezado si no existe.
+    Los datos arrancan siempre desde la fila 3.
+    """
+    try:
+        return spreadsheet.worksheet(SHEET_NAME_PLL)
+    except gspread.WorksheetNotFound:
+        sheet = spreadsheet.add_worksheet(
+            title=SHEET_NAME_PLL, rows=1000, cols=len(HEADERS_PLL_ROW1)
+        )
+        # Escribir ambas filas de header en una sola llamada
+        sheet.update("A1", [HEADERS_PLL_ROW1, HEADERS_PLL_ROW2])
+        return sheet
 
 
-def _next_row_by_col(sheet, col_index):
-    """
-    Devuelve el número de la próxima fila vacía basándose en la columna indicada.
-    Usa la columna que SIEMPRE tiene datos en esa hoja para contar correctamente.
-    """
-    values = sheet.col_values(col_index)  # incluye el header en [0]
-    return len(values) + 1
+# ── Conteo de filas de datos ──────────────────────────────────────────────────
 
-
-def _count_data_rows_pll(sheet):
+def _count_data_rows_pll(sheet) -> int:
     """
-    Cuenta cuántas filas de datos (sin contar el header) hay en PLL MULTIFACTURAS
-    usando la columna G (NumAtCard = nro_factura), que siempre se rellena.
-    Si la columna G solo tiene el header o está vacía → 0 registros.
+    Cuenta filas de datos en PLL usando col G (NumAtCard).
+    Ignora las dos primeras filas (headers).
+    Si col G tiene solo headers o está vacía → 0 registros.
     """
-    values = sheet.col_values(COL_PLL_NRO)  # col G
-    # values[0] es el header "NumAtCard", el resto son datos
-    data_rows = [v for v in values[1:] if v.strip() != ""]
+    values    = sheet.col_values(COL_PLL_NRO)   # incluye fila1 y fila2
+    data_rows = [v for v in values[2:] if v.strip() != ""]
     return len(data_rows)
 
 
-def _safe_append_facturas(sheet, row):
-    """Inserta en hoja Facturas usando columna A (no. fact) como referencia."""
-    next_row = _next_row_by_col(sheet, COL_FACTURAS_NRO)
-    end_col  = _col_letter(len(row))
-    sheet.update(f"A{next_row}:{end_col}{next_row}", [row], value_input_option="USER_ENTERED")
+def _next_row_facturas(sheet) -> int:
+    values = sheet.col_values(COL_FACTURAS_NRO)
+    return len(values) + 1
 
 
-def _safe_append_pll(sheet, row):
+def _next_row_pll(sheet) -> int:
     """
-    Inserta en hoja PLL MULTIFACTURAS usando columna G (NumAtCard) como referencia,
-    ya que la columna A (DocNum) siempre está vacía.
+    Calcula la próxima fila vacía en PLL usando col G.
+    Como hay 2 headers, si no hay datos devuelve 3.
     """
-    next_row = _next_row_by_col(sheet, COL_PLL_NRO)
-    end_col  = _col_letter(len(row))
-    sheet.update(f"A{next_row}:{end_col}{next_row}", [row], value_input_option="USER_ENTERED")
+    values = sheet.col_values(COL_PLL_NRO)   # fila1=header1, fila2=header2, resto=datos
+    data   = [v for v in values[2:] if v.strip() != ""]
+    return PLL_DATA_START + len(data)        # 3 + cantidad de datos
 
+
+# ── Construcción de filas ─────────────────────────────────────────────────────
 
 def _build_row_facturas(invoice: InvoiceData) -> list:
     servicio = f"SERVICIO MOVIL - {invoice.plan} - {invoice.periodo_facturacion}".upper()
     return [
-        invoice.nro_factura,                  # A
-        invoice.proveedor,                    # B
-        servicio,                             # C
-        "",                                   # D
-        "",                                   # E
-        invoice.periodo_facturacion,          # F
-        invoice.fecha_emision,                # G
-        invoice.monto_total,                  # H
-        "",                                   # I
-        "",                                   # J
-        "",                                   # K
-        "",                                   # L
-        invoice.monto_total * 0.87,           # M
-        "",                                   # N
+        invoice.nro_factura,
+        invoice.proveedor,
+        servicio,
+        "", "",
+        invoice.periodo_facturacion,
+        invoice.fecha_emision,
+        invoice.monto_total,
+        "", "", "", "",
+        invoice.monto_total * 0.87,
+        "",
     ]
 
 
 def _build_row_pll(invoice: InvoiceData, doc_entry: int) -> list:
     return [
-        "",                                   # A  DocNum          — vacío
-        doc_entry,                            # B  DocEntry        ← autoincremental
-        "",                                   # C  ItemCode        — vacío
-        "",                                   # D                  — vacío
-        "",                                   # E  DocDueDate      — vacío
-        "",                                   # F  CardCode        — vacío
-        invoice.nro_factura,                  # G  NumAtCard       ← nro_factura
-        "",                                   # H                  — vacío
-        "",                                   # I                  — vacío
-        "",                                   # J                  — vacío
-        invoice.monto_total,                  # K  DocTotal        ← monto_total
-        "",                                   # L  DocCurrency     — vacío
-        "",                                   # M  CostingCode     — vacío
-        "",                                   # N                  — vacío
-        invoice.concepto,                     # O  JournalMemo     ← concepto
-        invoice.fecha_emision,                # P  TaxDate         ← fecha_emision
-        invoice.razon_social_cliente,         # Q  U_RAZSOC        ← razon_social_cliente
-        invoice.cod_autorizacion,             # R  U_NROAUTOR      ← cod_autorizacion
-        "",                                   # S  U_FORMA_PAGO    — vacío
-        "",                                   # T  U_NOMBRE_SOL.   — vacío
-        "",                                   # U  U_ADJ_DIRECTA   — vacío
-        invoice.contrato,                     # V  U_NROCONTRATO   ← contrato
-        "",                                   # W  U_NROPAGO       — vacío
-        "",                                   # X  U_FECHAINICIO   — vacío
-        "",                                   # Y  U_FECHAFIN      — vacío
-        invoice.periodo_facturacion,          # Z  U_PERIODO       ← periodo_facturacion
-        invoice.nro_factura,                  # AA U_NRODEFACTURA  ← nro_factura (repetido)
-        "",                                   # AB U_INMUEBLE      — vacío
-        "",                                   # AC U_Nro_cuenta    — vacío
-        "",                                   # AD U_Nombre_banco  — vacío
-        invoice.cod_autorizacion,             # AE U_B_cuf         ← cod_autorizacion (repetido)
+        "",                              # A  DocNum
+        doc_entry,                       # B  DocEntry        ← autoincremental
+        "", "", "", "",                  # C D E F
+        invoice.nro_factura,             # G  NumAtCard
+        "", "", "",                      # H I J
+        invoice.monto_total,             # K  DocTotal
+        "", "", "",                      # L M N
+        invoice.concepto,                # O  JournalMemo
+        invoice.fecha_emision,           # P  TaxDate
+        invoice.razon_social_cliente,    # Q  U_RAZSOC
+        invoice.cod_autorizacion,        # R  U_NROAUTOR
+        "", "", "",                      # S T U
+        invoice.contrato,                # V  U_NROCONTRATOADENDA
+        "", "", "",                      # W X Y
+        invoice.periodo_facturacion,     # Z  U_PERIODO
+        invoice.nro_factura,             # AA U_NRODEFACTURA
+        "", "", "",                      # AB AC AD
+        invoice.cod_autorizacion,        # AE U_B_cuf
     ]
+
+
+# ── Inserción segura ──────────────────────────────────────────────────────────
+
+def _safe_append_facturas(sheet, row):
+    next_row = _next_row_facturas(sheet)
+    end_col  = _col_letter(len(row))
+    _with_retry(lambda: sheet.update(
+        f"A{next_row}:{end_col}{next_row}", [row], value_input_option="USER_ENTERED"
+    ))
+
+
+def _safe_append_pll(sheet, row):
+    next_row = _next_row_pll(sheet)
+    end_col  = _col_letter(len(row))
+    _with_retry(lambda: sheet.update(
+        f"A{next_row}:{end_col}{next_row}", [row], value_input_option="USER_ENTERED"
+    ))
+
+
+# ── API pública ───────────────────────────────────────────────────────────────
+
+def get_pll_next_doc_entry() -> int:
+    """
+    Devuelve el próximo DocEntry para PLL MULTIFACTURAS.
+    - Hoja vacía o recién limpiada → 1 (reset de secuencia).
+    - Con registros → max(DocEntry existente) + 1.
+    """
+    spreadsheet = _with_retry(_get_spreadsheet)
+    sheet_pll   = _get_or_create_sheet_pll(spreadsheet)
+
+    if _count_data_rows_pll(sheet_pll) == 0:
+        return 1
+
+    doc_entry_values = sheet_pll.col_values(COL_PLL_DOCENTRY)
+    numbers = []
+    for v in doc_entry_values[2:]:   # ignorar las 2 filas de header
+        try:
+            numbers.append(int(float(v)))
+        except (ValueError, TypeError):
+            pass
+
+    return (max(numbers) + 1) if numbers else 1
 
 
 def check_and_save_invoice(invoice: InvoiceData, pll_doc_entry: int) -> dict:
     """
-    Inserta la factura en cada hoja con validación INDEPENDIENTE.
-
-    Hoja 'Facturas'         → verifica duplicado en col A (no. fact)
-    Hoja 'PLL MULTIFACTURAS' → verifica duplicado en col G (NumAtCard)
-
-    pll_doc_entry: número de secuencia ya calculado externamente para esta factura.
+    Inserta en ambas hojas con validación independiente y reintentos automáticos.
     """
-    spreadsheet = _get_spreadsheet()
-
-    sheet_facturas = _get_or_create_sheet(spreadsheet, SHEET_NAME,     HEADERS_FACTURAS)
-    sheet_pll      = _get_or_create_sheet(spreadsheet, SHEET_NAME_PLL, HEADERS_PLL)
+    spreadsheet    = _with_retry(_get_spreadsheet)
+    sheet_facturas = _get_or_create_sheet_facturas(spreadsheet)
+    sheet_pll      = _get_or_create_sheet_pll(spreadsheet)
 
     spreadsheet_url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}"
 
     # ── Hoja Facturas ─────────────────────────────────────────────────────────
-    existing_facturas = sheet_facturas.col_values(COL_FACTURAS_NRO)
+    existing_facturas = _with_retry(lambda: sheet_facturas.col_values(COL_FACTURAS_NRO))
     if invoice.nro_factura in existing_facturas:
         status_facturas  = "duplicate"
         message_facturas = f"Factura {invoice.nro_factura} ya existe en Facturas."
@@ -233,7 +270,7 @@ def check_and_save_invoice(invoice: InvoiceData, pll_doc_entry: int) -> dict:
         message_facturas = f"Factura {invoice.nro_factura} agregada en Facturas."
 
     # ── Hoja PLL MULTIFACTURAS ────────────────────────────────────────────────
-    existing_pll = sheet_pll.col_values(COL_PLL_NRO)  # col G: NumAtCard
+    existing_pll = _with_retry(lambda: sheet_pll.col_values(COL_PLL_NRO))
     if invoice.nro_factura in existing_pll:
         status_pll  = "duplicate"
         message_pll = f"Factura {invoice.nro_factura} ya existe en PLL MULTIFACTURAS."
@@ -249,30 +286,3 @@ def check_and_save_invoice(invoice: InvoiceData, pll_doc_entry: int) -> dict:
         "message_pll":      message_pll,
         "spreadsheet_url":  spreadsheet_url,
     }
-
-
-def get_pll_next_doc_entry() -> int:
-    """
-    Calcula el próximo DocEntry para la hoja PLL MULTIFACTURAS.
-    - Si no hay registros (hoja vacía o recién limpiada) → empieza desde 1.
-    - Si hay registros → toma el máximo DocEntry existente + 1.
-    Esto permite al cliente limpiar la hoja y reiniciar la secuencia.
-    """
-    spreadsheet = _get_spreadsheet()
-    sheet_pll   = _get_or_create_sheet(spreadsheet, SHEET_NAME_PLL, HEADERS_PLL)
-
-    data_count = _count_data_rows_pll(sheet_pll)
-    if data_count == 0:
-        return 1  # hoja vacía o recién limpiada → resetear secuencia
-
-    # Leer col B (DocEntry) para encontrar el máximo actual
-    doc_entry_values = sheet_pll.col_values(COL_PLL_DOCENTRY)
-    # doc_entry_values[0] = "DocEntry" (header), el resto son números o vacíos
-    numbers = []
-    for v in doc_entry_values[1:]:
-        try:
-            numbers.append(int(float(v)))
-        except (ValueError, TypeError):
-            pass
-
-    return (max(numbers) + 1) if numbers else 1

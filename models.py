@@ -17,13 +17,12 @@ class InvoiceData(BaseModel):
     concepto: str = ""
 
 class ProcessResult(BaseModel):
-    # Estado global (para compatibilidad con el frontend)
-    status: str                         # "added" | "duplicate" | "error"
+    status: str                          # "added" | "duplicate" | "error"
     nro_factura: str
+    filename: Optional[str] = None       # nombre del archivo PDF original
     message: str
     spreadsheet_url: Optional[str] = None
     invoice_data: Optional[InvoiceData] = None
-    # Estado individual por hoja
     status_facturas:  Optional[str] = None
     message_facturas: Optional[str] = None
     status_pll:       Optional[str] = None
