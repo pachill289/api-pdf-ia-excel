@@ -62,6 +62,7 @@ COL_FACTURAS_NRO = 1   # col A: no. fact
 COL_PLL_DOCENTRY = 2   # col B: DocEntry
 COL_PLL_NRO      = 7   # col G: NumAtCard = nro_factura
 PLL_DATA_START   = 3   # los datos arrancan en fila 3 (filas 1 y 2 son headers)
+COL_CUF_VAL = 18       # col R: se usa para validar facturas repetidas por el código único de factura CUF
 
 # ── Utilidades ────────────────────────────────────────────────────────────────
 
@@ -251,7 +252,7 @@ def get_pll_next_doc_entry() -> int:
 
 def check_and_save_invoice(invoice: InvoiceData, pll_doc_entry: int) -> dict:
     """
-    Inserta en ambas hojas con validación independiente y reintentos automáticos.
+    Inserta en ambas hojas con validación por el CUFD y reintentos automáticos.
     """
     spreadsheet    = _with_retry(_get_spreadsheet)
     sheet_facturas = _get_or_create_sheet_facturas(spreadsheet)
@@ -259,22 +260,17 @@ def check_and_save_invoice(invoice: InvoiceData, pll_doc_entry: int) -> dict:
 
     spreadsheet_url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}"
 
-    # ── Hoja Facturas ─────────────────────────────────────────────────────────
-    existing_facturas = _with_retry(lambda: sheet_facturas.col_values(COL_FACTURAS_NRO))
-    if invoice.nro_factura in existing_facturas:
+    # ── Inserción Hoja Facturas y Hoja PLL MULTIFACTURAS (validacion de facturas por el CUFD) ────────────────────────────────────────────────
+    existing_pll = _with_retry(lambda: sheet_pll.col_values(COL_CUF_VAL))
+    if invoice.cod_autorizacion in existing_pll:
         status_facturas  = "duplicate"
         message_facturas = f"Factura {invoice.nro_factura} ya existe en Facturas."
+        status_pll  = "duplicate"
+        message_pll = f"Factura {invoice.nro_factura} ya existe en PLL MULTIFACTURAS."
     else:
         _safe_append_facturas(sheet_facturas, _build_row_facturas(invoice))
         status_facturas  = "added"
         message_facturas = f"Factura {invoice.nro_factura} agregada en Facturas."
-
-    # ── Hoja PLL MULTIFACTURAS ────────────────────────────────────────────────
-    existing_pll = _with_retry(lambda: sheet_pll.col_values(COL_PLL_NRO))
-    if invoice.nro_factura in existing_pll:
-        status_pll  = "duplicate"
-        message_pll = f"Factura {invoice.nro_factura} ya existe en PLL MULTIFACTURAS."
-    else:
         _safe_append_pll(sheet_pll, _build_row_pll(invoice, pll_doc_entry))
         status_pll  = "added"
         message_pll = f"Factura {invoice.nro_factura} agregada en PLL MULTIFACTURAS."
