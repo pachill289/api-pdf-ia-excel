@@ -3,8 +3,8 @@ from typing import Optional
 
 class InvoiceData(BaseModel):
     nro_factura: str = ""
-    nit_proveedor: str = "1020255020"
-    proveedor: str = "TELEFONICA CELULAR DE BOLIVIA S.A."
+    nit_proveedor: str = ""
+    proveedor: str = ""
     cod_autorizacion: str = ""
     fecha_emision: str = ""
     razon_social_cliente: str = ""
@@ -12,14 +12,15 @@ class InvoiceData(BaseModel):
     periodo_facturacion: str = ""
     contrato: str = ""
     plan: str = ""
-    importe_base_credito_fiscal: int = 0
-    monto_total: int = 0
+    subtotal: float = 0          # nuevo
+    importe_base_credito_fiscal: float = 0
+    monto_total: float = 0
     concepto: str = ""
 
 class ProcessResult(BaseModel):
-    status: str                          # "added" | "duplicate" | "error"
+    status: str
     nro_factura: str
-    filename: Optional[str] = None       # nombre del archivo PDF original
+    filename: Optional[str] = None
     message: str
     spreadsheet_url: Optional[str] = None
     invoice_data: Optional[InvoiceData] = None
