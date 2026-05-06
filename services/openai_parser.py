@@ -32,82 +32,106 @@ Estructura EXACTA:
 === REGLAS CAMPO POR CAMPO ===
 
 nro_factura:
-  ENTEL: Busca la línea que dice exactamente "FACTURA NRO:" (en el encabezado superior).
-         El número de factura es el que aparece en esa misma línea o inmediatamente después.
-         Ejemplos reales: 2317618, 2319711, 1542847, 2318913.
-         NUNCA uses el NIT del cliente (1007017028) como número de factura.
-         NUNCA uses los códigos de servicio (31978, 31958, 31982, etc.) como número de factura.
-         Si el texto tiene "NRO.FACTURA:" seguido de dos números en líneas separadas
-         (primero el NIT del cliente, luego el número real), toma el SEGUNDO número (el más corto).
-  TIGO:  Busca "Nro Factura:" en el encabezado y toma el número que le sigue.
+  Busca la etiqueta "NRO.FACTURA:" o "FACTURA NRO" o "NRO FACTURA".
+  El número real de factura es un número de 6-7 dígitos como 2317618, 1542847, 1541885.
+  Si ves dos números juntos como "1007017028\n2317618", el primero es el NIT del cliente
+  (10 dígitos) y el segundo es el número de factura. Toma el SEGUNDO.
+  NUNCA uses el NIT del cliente (1007017028) como número de factura.
 
 nit_proveedor:
-  Es el NIT del EMISOR (quien emite la factura):
-  ENTEL → "1020703023"
-  TIGO  → "1020255020"
+  NIT del EMISOR (quien emite la factura):
+  ENTEL → 1020703023
+  TIGO  → 1020255020
 
 proveedor:
   ENTEL → "EMPRESA NACIONAL DE TELECOMUNICACIONES S. A."
   TIGO  → "TELEFONICA CELULAR DE BOLIVIA S.A."
 
 cod_autorizacion:
-  Busca "CODIGO DE AUTORIZACION" o "Cod. Autorizacion" o "CUF:".
+  Busca "CODIGO DE AUTORIZACION", "Cod. Autorizacion" o "CUF:".
   Concatena TODAS las partes sin espacios ni saltos de línea.
   Ejemplo: "45D6DEA712790ADE4B035EDAA" + "C7A01E79548D16B495B20DDED" + "7ABAF74"
-         → "45D6DEA712790ADE4B035EDAAC7A01E79548D16B495B20DDED7ABAF74"
+         = "45D6DEA712790ADE4B035EDAAC7A01E79548D16B495B20DDED7ABAF74"
 
 fecha_emision:
-  ENTEL: Busca la etiqueta "FECHA DE EMISION:" (tiene hora AM/PM).
-         Extrae SOLO la parte DD/MM/YYYY. Ejemplo: "03/04/2026 04:02 AM" → "03/04/2026"
-  TIGO:  Busca "Lugar y Fecha de Emision:" → extrae solo DD/MM/YYYY.
+  CRÍTICO: La fecha SIEMPRE debe estar en formato DD/MM/YYYY. Nunca devuelvas un número.
+  Busca "FECHA DE EMISION:" — tiene hora AM/PM junto a ella.
+  Extrae SOLO la parte DD/MM/YYYY. Ejemplo: "03/04/2026 04:02 AM" → "03/04/2026"
   NUNCA uses "FECHA DE CORTE TOTAL" ni "FECHA DE DISPOSICION".
+  NUNCA devuelvas un número como 46115 o 46082 — eso es incorrecto.
 
 razon_social_cliente:
-  Es la empresa que RECIBE la factura (el cliente).
-  ENTEL: Busca "RAZON SOCIAL:" seguido del nombre de la empresa cliente.
-         El resultado esperado es: "LA BOLIVIANA CIACRUZ DE SEGUROS Y REASEGUROS S.A."
-         NO uses la dirección (ej: "LA PAZ - ZONA CENTRAL...") como razón social.
-  TIGO:  Busca "Nombre o Razon Social:".
+  La empresa que RECIBE la factura.
+  Busca "RAZON SOCIAL:" seguido del nombre de empresa.
+  Resultado esperado: "LA BOLIVIANA CIACRUZ DE SEGUROS Y REASEGUROS S.A."
+  NO uses direcciones físicas (ej: "LA PAZ - ZONA CENTRAL...") como razón social.
 
 nit_cliente:
-  NIT de quien recibe la factura. ENTEL y TIGO: 1007017028
+  NIT de quien recibe la factura → 1007017028
 
 periodo_facturacion:
-  Extrae el MES en español MAYÚSCULAS del campo periodo.
-  "03/2026" o "01/03/2026 a 31/03/2026" → "MARZO"
+  El MES en MAYÚSCULAS del campo "PERIODO FACTURACION".
+  "03/2026" o "03/2026" → "MARZO"
   Tabla: 01=ENERO 02=FEBRERO 03=MARZO 04=ABRIL 05=MAYO 06=JUNIO
          07=JULIO 08=AGOSTO 09=SEPTIEMBRE 10=OCTUBRE 11=NOVIEMBRE 12=DICIEMBRE
 
 contrato:
-  ENTEL: Busca "CONTRATO:" si aparece. Muchas facturas no tienen contrato → "".
-  TIGO:  Busca "Contrato:".
+  Busca "CONTRATO:" si aparece. Muchas facturas no lo tienen → "".
 
 plan:
-  ENTEL: Busca "PLAN:" y toma el texto hasta el siguiente salto de línea.
-         Ejemplos: "PBX ANTIGUO", "LINEA ENTEL LOCAL", "FIBRA HOGAR NUEVO".
-         Si hay "CANTIDAD DE LINEAS:" NO lo incluyas en el plan.
-  TIGO:  Busca "Plan:".
+  Busca "PLAN:" y toma el texto hasta el siguiente salto o hasta "CANTIDAD DE LINEAS".
+  NO incluyas "- CANTIDAD DE LINEAS: N" en el plan.
+  Si el plan está vacío o no existe, usa el tipo de servicio principal (ej: "CORPORATIVO EXACTO").
 
 subtotal:
-  Busca "SUBTOTAL Bs." y toma el número. Número con decimales permitido.
+  Busca "SUBTOTAL Bs." y toma el número. Decimal permitido.
+  Si no aparece, usa el importe total facturado.
 
 importe_base_credito_fiscal:
-  ENTEL: "IMPORTE BASE PARA CREDITO FISCAL Bs."
-  TIGO:  "Importe Base Credito Fiscal"
-  Número con decimales permitido.
+  Busca "IMPORTE BASE PARA CREDITO FISCAL Bs." o "IMPORTE BASE CREDITO FISCAL".
+  Decimal permitido.
 
 monto_total:
-  ENTEL: "TOTAL ENTEL Bs.:" — toma el último valor (el monto final a pagar).
-  TIGO:  "Monto Total a Pagar"
-  Número con decimales permitido.
+  ENTEL: busca "TOTAL ENTEL Bs.:" y toma el ÚLTIMO valor (monto final a pagar).
+  TIGO:  busca "Monto Total a Pagar".
+  Decimal permitido.
 
 concepto:
   Construir como: "Servicio [marca] - [plan] - [periodo]"
   Ejemplos:
     "Servicio Entel - PBX ANTIGUO - MARZO"
     "Servicio Tigo - Internet Dedicado 7 - MARZO"
+    "Servicio Entel - CORPORATIVO EXACTO - MARZO"
 
 REGLA FINAL: Si un campo no existe usar "" o 0. No inventes datos."""
+
+
+def _fix_date(value: str) -> str:
+    """
+    Corrige fechas que llegaron como número serial de Excel (ej: 46115)
+    convirtiéndolas de vuelta a DD/MM/YYYY.
+    También extrae solo la parte de fecha si viene con hora.
+    """
+    if not value:
+        return value
+
+    # Si es un número puro (serial de Excel) → convertir
+    try:
+        serial = float(value)
+        if 40000 < serial < 55000:   # rango de fechas de Excel 2010-2050
+            from datetime import date, timedelta
+            # Excel epoch: 1 enero 1900 (con bug de año bisiesto 1900)
+            dt = date(1899, 12, 30) + timedelta(days=int(serial))
+            return dt.strftime("%d/%m/%Y")
+    except (ValueError, TypeError):
+        pass
+
+    # Si viene con hora (ej: "03/04/2026 04:02 AM") → extraer solo fecha
+    match = re.match(r'(\d{1,2}/\d{1,2}/\d{4})', str(value))
+    if match:
+        return match.group(1)
+
+    return value
 
 
 def parse_invoice_with_gpt(text: str) -> InvoiceData:
@@ -131,4 +155,9 @@ def parse_invoice_with_gpt(text: str) -> InvoiceData:
     raw = re.sub(r"```json|```", "", raw).strip()
 
     data = json.loads(raw)
+
+    # Corrección defensiva de fechas antes de validar con Pydantic
+    if "fecha_emision" in data:
+        data["fecha_emision"] = _fix_date(str(data["fecha_emision"]))
+
     return InvoiceData(**data)
