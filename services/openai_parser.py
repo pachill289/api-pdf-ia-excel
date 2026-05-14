@@ -143,7 +143,7 @@ def parse_invoice_with_gpt(text: str) -> InvoiceData:
     client = OpenAI(api_key=api_key)
 
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model="gpt-4o-mini",
         temperature=0,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
