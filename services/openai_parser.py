@@ -26,6 +26,7 @@ Estructura EXACTA:
   "subtotal": 0,
   "importe_base_credito_fiscal": 0,
   "monto_total": 0,
+  "descuento": 0,
   "concepto": ""
 }
 
@@ -95,6 +96,10 @@ monto_total:
   ENTEL: busca "TOTAL ENTEL Bs.:" y toma el ÚLTIMO valor (monto final a pagar).
   TIGO:  busca "Monto Total a Pagar".
   Decimal permitido.
+
+descuentos:
+  Busca "DESCUENTOS Bs." y toma el número. Decimal permitido.
+  Si no existe usar 0.
 
 concepto:
   Construir como: "Servicio [marca] - [plan] - [periodo]"

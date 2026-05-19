@@ -174,7 +174,8 @@ def _build_row_pll(invoice: InvoiceData, doc_entry: int) -> list:
         "", "", "", "",                  # C D E F              — vacíos
         invoice.nro_factura,             # G  NumAtCard         ← nro_factura
         invoice.subtotal,                # H  SUBTOTAL          ← subtotal
-        "", "",                          # I J                  — vacíos
+        invoice.descuento,              # I  DESCUENTO
+        "",                              # J                    — vacíos
         invoice.monto_total,             # K  DocTotal          ← monto_total
         "", "", "",                      # L M N                — vacíos
         invoice.concepto,                # O  JournalMemo       ← concepto

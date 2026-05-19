@@ -12,9 +12,10 @@ class InvoiceData(BaseModel):
     periodo_facturacion: str = ""
     contrato: str = ""
     plan: str = ""
-    subtotal: float = 0          # nuevo
+    subtotal: float = 0          
     importe_base_credito_fiscal: float = 0
     monto_total: float = 0
+    descuento: float = 0       # nuevo
     concepto: str = ""
 
 class ProcessResult(BaseModel):
